@@ -12,9 +12,8 @@ limitations under the License.
 */
 package io.kubernetes.client.spring.extended.manifests;
 
-import com.github.benmanes.caffeine.cache.CacheLoader;
+import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.LoadingCache;
 import io.kubernetes.client.openapi.models.V1ConfigMap;
 import io.kubernetes.client.spring.extended.manifests.annotation.FromConfigMap;
 import io.kubernetes.client.spring.extended.manifests.config.KubernetesManifestsProperties;
@@ -24,9 +23,6 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
-import org.checkerframework.checker.nullness.qual.NonNull;
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -80,15 +76,7 @@ public class KubernetesFromConfigMapProcessor
       ConfigMapGetter configMapGetter =
           getOrCreateConfigMapGetter(fromConfigMapAnnotation, applicationContext);
 
-      LoadingCache<String, String> configMapDataCache =
-          Caffeine.newBuilder()
-              .expireAfterWrite(manifestsProperties.getRefreshInterval())
-              .build(
-                  new ConfigMapGetterCacheLoader(
-                      () -> {
-                        return configMapGetter.get(
-                            fromConfigMapAnnotation.namespace(), fromConfigMapAnnotation.name());
-                      }));
+      Cache<String, String> configMapDataCache = Caffeine.newBuilder().build();
       fullyRefreshCache(configMapGetter, fromConfigMapAnnotation, configMapDataCache);
       configMapKeyRefresher.scheduleAtFixedRate(
           () -> {
@@ -106,14 +94,20 @@ public class KubernetesFromConfigMapProcessor
   private static void fullyRefreshCache(
       ConfigMapGetter configMapGetter,
       FromConfigMap fromConfigMapAnnotation,
-      LoadingCache<String, String> configMapDataCache) {
+      Cache<String, String> configMapDataCache) {
     V1ConfigMap configMap =
         configMapGetter.get(fromConfigMapAnnotation.namespace(), fromConfigMapAnnotation.name());
     if (configMap == null || configMap.getData() == null) {
+      configMapDataCache.invalidateAll();
       return;
     }
     // TODO: make the cache data refreshment atomic
-    configMap.getData().keySet().stream().forEach(key -> configMapDataCache.refresh(key));
+    Map<String, String> newData = configMap.getData();
+    newData.forEach(configMapDataCache::put);
+    configMapDataCache.asMap().keySet().stream()
+        .filter(key -> !newData.containsKey(key))
+        .collect(java.util.stream.Collectors.toList())
+        .forEach(configMapDataCache::invalidate);
   }
 
   private ConfigMapGetter getOrCreateConfigMapGetter(
@@ -143,23 +137,5 @@ public class KubernetesFromConfigMapProcessor
   @Override
   public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
     this.applicationContext = applicationContext;
-  }
-
-  static class ConfigMapGetterCacheLoader implements CacheLoader<String, String> {
-
-    ConfigMapGetterCacheLoader(Supplier<V1ConfigMap> configMapSupplier) {
-      this.configMapSupplier = configMapSupplier;
-    }
-
-    private final Supplier<V1ConfigMap> configMapSupplier;
-
-    @Override
-    public @Nullable String load(@NonNull String key) throws Exception {
-      V1ConfigMap configMap = this.configMapSupplier.get();
-      if (configMap == null || configMap.getData() == null) {
-        return null;
-      }
-      return configMap.getData().get(key);
-    }
   }
 }
