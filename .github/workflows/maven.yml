@@ -6,8 +6,22 @@ name: build
 on:
   push:
     branches: [ "master", "master-java8", "release-**" ]
+    paths:
+      - '**/*.java'
+      - '**/pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - '.github/workflows/maven.yml'
   pull_request:
     branches: [ "master", "master-java8", "release-**" ]
+    paths:
+      - '**/*.java'
+      - '**/pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - '.github/workflows/maven.yml'
 
 jobs:
   verify-format:
